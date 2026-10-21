@@ -1,0 +1,60 @@
+name: AI Stock Trader Paper - Scheduled Analysis
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Market session checks. UTC windows include the US daylight-saving transitions.
+    # The Python worker verifies the official Alpaca market clock before any action.
+    - cron: '7,22,37,52 13-21 * * 1-5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-stock-trader
+  cancel-in-progress: false
+
+jobs:
+  paper-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ALPACA_PAPER_KEY: ${{ secrets.ALPACA_PAPER_KEY }}
+      ALPACA_PAPER_SECRET: ${{ secrets.ALPACA_PAPER_SECRET }}
+      DRY_RUN: 'true'
+      MAX_DAILY_ORDERS: '10'
+      POSITION_CAP_USD: '200'
+      GROSS_EXPOSURE_LIMIT: '0.03'
+      SYMBOLS: 'AMD,NVDA,AAPL,MSFT,TSLA,AMZN,GOOGL,META,TTWO'
+      LOG_DIR: '${{ runner.temp }}/trader-logs'
+      LIVE_TRADING: 'false'
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        working-directory: ai-stock-trader-worker
+        run: python -m unittest discover -s tests -v
+      - name: Verify paper credentials are configured
+        shell: bash
+        run: |
+          if [[ -z "$ALPACA_PAPER_KEY" || -z "$ALPACA_PAPER_SECRET" ]]; then
+            echo "::error::Set ALPACA_PAPER_KEY and ALPACA_PAPER_SECRET in GitHub Actions secrets. No trading request was made."
+            exit 1
+          fi
+      - name: Execute one dry-run market analysis cycle
+        working-directory: ai-stock-trader-worker
+        run: python -c "import worker; worker.journal({'event':'github_actions_cycle','dry_run':True}); worker.cycle()"
+      - name: Archive event log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stock-paper-events-${{ github.run_id }}
+          path: ${{ runner.temp }}/trader-logs/trading-events.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
