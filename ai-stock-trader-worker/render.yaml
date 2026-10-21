@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: ai-stock-trader-paper-worker
+    runtime: docker
+    plan: starter
+    envVars:
+      - key: ALPACA_PAPER_KEY
+        sync: false
+      - key: ALPACA_PAPER_SECRET
+        sync: false
+      - key: DRY_RUN
+        value: "true"
+      - key: LIVE_TRADING
+        value: "false"
+      - key: SYMBOLS
+        value: AMD,NVDA,AAPL,MSFT,TSLA,AMZN,GOOGL,META,TTWO
+      - key: MAX_DAILY_ORDERS
+        value: "10"
+      - key: POSITION_CAP_USD
+        value: "200"
+      - key: GROSS_EXPOSURE_LIMIT
+        value: "0.03"
