@@ -1,6 +1,6 @@
 """Paper-only, long-lived stock strategy worker. No live trading endpoints."""
 from __future__ import annotations
-import json, logging, os, time, urllib.request, urllib.error
+import json, logging, os, time, urllib.request, urllib.error, xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -10,8 +10,9 @@ SYMBOLS = [x.strip().upper() for x in os.getenv('SYMBOLS','AMD,NVDA,AAPL,MSFT,TS
 INTERVAL_SECONDS = 300
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() != 'false'
 ORDER_LIMIT = int(os.getenv('MAX_DAILY_ORDERS', '10'))
-NOTIONAL_CAP = float(os.getenv('POSITION_CAP_USD','200'))
-GROSS_FRACTION = float(os.getenv('GROSS_EXPOSURE_LIMIT','0.03'))
+BUDGET_EUR = float(os.getenv('TRADING_BUDGET_EUR', '1000'))
+if not 0 < BUDGET_EUR <= 1000: raise ValueError('TRADING_BUDGET_EUR must be within (0, 1000]')
+MAX_ORDER_FRACTION = 0.50  # Keep room for two independent positions.
 RUN_DIR = os.getenv('LOG_DIR','.')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('paper-worker')
@@ -55,6 +56,18 @@ def signal(closes):
     return 'neutral'
 
 
+def eurusd_rate():
+    """ECB reference rate, fail closed when unavailable or malformed."""
+    url = 'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml'
+    with urllib.request.urlopen(url, timeout=10) as response:
+        root = ET.fromstring(response.read())
+    rates = [float(node.attrib['rate']) for node in root.iter()
+             if node.attrib.get('currency') == 'USD']
+    if len(rates) != 1 or not (0.5 < rates[0] < 2.0):
+        raise RuntimeError('No valid ECB EUR/USD reference rate')
+    return rates[0]
+
+
 def cycle():
     clock=request('/v2/clock')
     if not in_regular_session(clock):
@@ -65,6 +78,7 @@ def cycle():
         journal({'event':'blocked_account'});return
     equity=float(account['equity']);cash=float(account['cash'])
     if equity<=0:raise RuntimeError('Invalid equity')
+    budget_usd = min(equity, BUDGET_EUR * eurusd_rate())
     positions=request('/v2/positions')
     orders=request('/v2/orders?status=all&limit=500&direction=desc')
     day=datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d')
@@ -72,6 +86,11 @@ def cycle():
     if len(bot_orders)>=ORDER_LIMIT:
         journal({'event':'daily_order_limit'});return
     gross=sum(abs(float(x.get('market_value') or 0)) for x in positions)
+    # Reserve notional for open orders to prevent overlapping cycles exceeding budget.
+    open_states = ('new','accepted','pending_new','partially_filled','held')
+    gross += sum(abs(float(x.get('notional') or (float(x.get('qty') or 0) * float(x.get('limit_price') or x.get('filled_avg_price') or 0))))
+                 for x in orders if x.get('status') in open_states)
+    per_order_cap = budget_usd * MAX_ORDER_FRACTION
     count=0
     for ticker in SYMBOLS:
         if count>=2 or len(bot_orders)+count>=ORDER_LIMIT:break
@@ -95,12 +114,15 @@ def cycle():
             if held:continue # Phase 1: never auto-close existing positions, preserve ownership boundary.
             if direction=='neutral':continue
             if direction=='short' and not (asset.get('shortable') and asset.get('easy_to_borrow')):continue
-            if gross+NOTIONAL_CAP>GROSS_FRACTION*equity or cash<2*NOTIONAL_CAP:continue
-            px=closes[-1];qty=int(NOTIONAL_CAP/px)
+            available = max(0.0, budget_usd - gross)
+            px=closes[-1]
+            notional = min(per_order_cap, available)
+            if direction == 'long': notional = min(notional, cash)
+            qty=int(notional/px)
             if qty<1:continue
             payload={'symbol':ticker,'qty':str(qty),'side':'buy' if direction=='long' else 'sell',
                      'type':'market','time_in_force':'day', 'client_order_id':'cl'+day+ticker}
-            journal({'event':'candidate','symbol':ticker,'direction':direction,'qty':qty,'dry_run':DRY_RUN})
+            journal({'event':'candidate','symbol':ticker,'direction':direction,'qty':qty,'dry_run':DRY_RUN,'budget_eur':BUDGET_EUR,'budget_usd':round(budget_usd,2)})
             if not DRY_RUN:
                 order=request('/v2/orders',method='POST',payload=payload)
                 journal({'event':'submitted','symbol':ticker,'order_id':order.get('id'),'status':order.get('status')})
