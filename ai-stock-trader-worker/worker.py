@@ -78,7 +78,7 @@ def cycle():
     gross=sum(abs(float(x.get('market_value') or 0)) for x in positions)
     # Reserve notional for open orders to prevent overlapping cycles exceeding budget.
     open_states = ('new','accepted','pending_new','partially_filled','held')
-    gross += sum(max(budget_usd * MAX_ORDER_FRACTION,
+    gross += sum(max(budget_usd,
                      abs(float(x.get('notional') or (float(x.get('qty') or 0) * float(x.get('limit_price') or x.get('filled_avg_price') or 0)))))
                  for x in orders if x.get('status') in open_states)
     per_order_cap = budget_usd
