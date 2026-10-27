@@ -88,7 +88,8 @@ def cycle():
     gross=sum(abs(float(x.get('market_value') or 0)) for x in positions)
     # Reserve notional for open orders to prevent overlapping cycles exceeding budget.
     open_states = ('new','accepted','pending_new','partially_filled','held')
-    gross += sum(abs(float(x.get('notional') or (float(x.get('qty') or 0) * float(x.get('limit_price') or x.get('filled_avg_price') or 0))))
+    gross += sum(max(budget_usd * MAX_ORDER_FRACTION,
+                     abs(float(x.get('notional') or (float(x.get('qty') or 0) * float(x.get('limit_price') or x.get('filled_avg_price') or 0)))))
                  for x in orders if x.get('status') in open_states)
     per_order_cap = budget_usd * MAX_ORDER_FRACTION
     count=0
@@ -127,6 +128,7 @@ def cycle():
                 order=request('/v2/orders',method='POST',payload=payload)
                 journal({'event':'submitted','symbol':ticker,'order_id':order.get('id'),'status':order.get('status')})
             count+=1;gross+=qty*px
+            if direction == 'long': cash-=qty*px
         except Exception as exc:
             journal({'event':'error','symbol':ticker,'message':str(exc)[:160]})
 
