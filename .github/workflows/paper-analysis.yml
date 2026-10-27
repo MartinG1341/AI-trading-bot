@@ -23,7 +23,8 @@ jobs:
       ALPACA_PAPER_SECRET: ${{ secrets.ALPACA_PAPER_SECRET }}
       DRY_RUN: 'true'
       MAX_DAILY_ORDERS: '10'
-      TRADING_BUDGET_EUR: '1000'
+      TRADING_BUDGET_USD: '1000'
+      MIN_TRADE_USD: '700'
       SYMBOLS: 'AMD,NVDA,AAPL,MSFT,TSLA,AMZN,GOOGL,META,TTWO'
       LOG_DIR: '${{ runner.temp }}/trader-logs'
       LIVE_TRADING: 'false'
